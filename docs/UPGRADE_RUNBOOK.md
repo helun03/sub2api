@@ -1,7 +1,7 @@
 # 升级手册:合并上游开源分支 + 重建部署
 
 > 本文档记录本 fork(`helun03/sub2api`)从上游 `Wei-Shaw/sub2api` 同步新版本、重建镜像并重新部署的标准流程。
-> 下次「merge 开源分支并升级」直接照此执行即可。最近一次执行:**0.1.137 → 0.1.138**(2026-06-25)。
+> 下次「merge 开源分支并升级」直接照此执行即可。最近一次执行:**0.1.138 → 0.1.142**(2026-07-01,158 提交,零冲突)。
 
 ---
 
@@ -107,20 +107,25 @@ EOF
 cd /home/admin/sub2api
 VER=$(tr -d '\r\n' < backend/cmd/server/VERSION)
 
-# 双标签:版本 tag 用于追溯,:local 供 compose 使用
-docker build -t sub2api:$VER -t sub2api:local -f Dockerfile .
+# 双标签:版本 tag 追溯,:local 供 compose 使用。显式传 VERSION 保证 --version 输出确定
+# (根 Dockerfile 已改为 scripts/resolve-version.sh:优先精确 git tag,否则回退 VERSION 文件;
+#  merge 后的 HEAD 不在 tag 上,不传 VERSION 会回退到 VERSION 文件,但显式传更稳)
+docker build --build-arg VERSION=$VER -t sub2api:$VER -t sub2api:local -f Dockerfile .
 ```
 
-**构建慢时**(拉取卡)再加 xray 代理(本机直连通常够快,非必须):
-
-```bash
-docker build \
-  --build-arg HTTP_PROXY=http://172.17.0.1:10809 \
-  --build-arg HTTPS_PROXY=http://172.17.0.1:10809 \
-  --build-arg NO_PROXY=localhost,127.0.0.1 \
-  -t sub2api:$VER -t sub2api:local -f Dockerfile .
-```
-
+> ⚠️ **别给这个构建挂 xray 代理(踩过坑,0.1.142)**。Dockerfile 里 `GOPROXY=https://goproxy.cn,direct`
+> 本身就是国内镜像、直连最快;一旦传 `HTTP_PROXY/HTTPS_PROXY`,Go 会把对 goproxy.cn 的请求也塞进
+> xray 隧道,`go mod download` 的大量并发连接直接把 xray 打到 `172.17.0.1:10809: connection refused`,
+> 整个构建失败。**默认直连即可**(前端 npm 直连实测 ~1.2s,Go 走 goproxy.cn 也快)。
+>
+> 真遇到某个源直连卡住需要代理时,**必须把 goproxy.cn 及 Go module 后端排除**,否则重蹈覆辙:
+> ```bash
+> docker build --build-arg VERSION=$VER \
+>   --build-arg HTTP_PROXY=http://172.17.0.1:10809 \
+>   --build-arg HTTPS_PROXY=http://172.17.0.1:10809 \
+>   --build-arg NO_PROXY=localhost,127.0.0.1,172.17.0.1,goproxy.cn,.goproxy.cn,proxy.golang.org,sum.golang.org \
+>   -t sub2api:$VER -t sub2api:local -f Dockerfile .
+> ```
 > 判断是不是网络瓶颈:`curl -s -o /dev/null -w "%{time_total}s\n" https://registry.npmjs.org/`。直连够快就别上代理。
 
 ## 6. 重新部署
