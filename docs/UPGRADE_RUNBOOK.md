@@ -1,7 +1,7 @@
 # 升级手册:合并上游开源分支 + 重建部署
 
 > 本文档记录本 fork(`helun03/sub2api`)从上游 `Wei-Shaw/sub2api` 同步新版本、重建镜像并重新部署的标准流程。
-> 下次「merge 开源分支并升级」直接照此执行即可。最近一次执行:**0.1.142 → 0.1.143**(2026-07-02,53 提交,零冲突)。
+> 下次「merge 开源分支并升级」直接照此执行即可。最近一次执行:**0.1.143 → 0.1.151**(2026-07-10,318 提交,零冲突)。
 
 ---
 
@@ -110,11 +110,19 @@ VER=$(tr -d '\r\n' < backend/cmd/server/VERSION)
 # 双标签:版本 tag 追溯,:local 供 compose 使用。显式传 VERSION 保证 --version 输出确定
 # (根 Dockerfile 已改为 scripts/resolve-version.sh:优先精确 git tag,否则回退 VERSION 文件;
 #  merge 后的 HEAD 不在 tag 上,不传 VERSION 会回退到 VERSION 文件,但显式传更稳)
-docker build --build-arg VERSION=$VER -t sub2api:$VER -t sub2api:local -f Dockerfile .
+#
+# ⚠️ 若 shell 里设了 http_proxy/https_proxy(比如刚才为了 git fetch 开了 xray),
+#    docker CLI 会把它们自动转成 build-arg 塞进构建 → 踩下面的 goproxy.cn 坑!
+#    构建时务必用 env -u 剥掉(git fetch 需要代理,docker build 要直连):
+env -u http_proxy -u https_proxy -u all_proxy -u no_proxy \
+    -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u NO_PROXY \
+    docker build --build-arg VERSION=$VER -t sub2api:$VER -t sub2api:local -f Dockerfile .
+# (构建久,可加 nohup ... > /tmp/sub2api-build-$VER.log 2>&1 & 后台跑再 tail 日志)
 ```
 
-> ⚠️ **别给这个构建挂 xray 代理(踩过坑,0.1.142)**。Dockerfile 里 `GOPROXY=https://goproxy.cn,direct`
-> 本身就是国内镜像、直连最快;一旦传 `HTTP_PROXY/HTTPS_PROXY`,Go 会把对 goproxy.cn 的请求也塞进
+> ⚠️ **别给这个构建挂 xray 代理(踩过坑,0.1.142;0.1.151 再次确认)**。Dockerfile 里 `GOPROXY=https://goproxy.cn,direct`
+> 本身就是国内镜像、直连最快;一旦 `HTTP_PROXY/HTTPS_PROXY` 生效(**注意:shell 里 export 的代理变量
+> 会被 docker CLI 自动转发为 build-arg,不用显式 `--build-arg` 也会中招**),Go 会把对 goproxy.cn 的请求也塞进
 > xray 隧道,`go mod download` 的大量并发连接直接把 xray 打到 `172.17.0.1:10809: connection refused`,
 > 整个构建失败。**默认直连即可**(前端 npm 直连实测 ~1.2s,Go 走 goproxy.cn 也快)。
 >
